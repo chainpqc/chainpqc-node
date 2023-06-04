@@ -7,7 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"github.com/tecbot/gorocksdb"
+	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/wonabru/bip39"
 
 	"github.com/chainpqc/chainpqc-node/common"
@@ -40,15 +40,27 @@ type AnyWallet interface {
 }
 
 func init() {
-	mainWallet = EmptyWallet()
 	var err error
+	//err = os.MkdirAll("/.chainpqc/db/wallet/"+common.GetSigName(), 0755)
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
+	//err = os.MkdirAll("/.chainpqc/db/blockchain/", 0755)
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
+	mainWallet = EmptyWallet()
+
 	HomePath, err = os.UserHomeDir()
 	if err != nil {
 		log.Fatal(err)
 	}
-	HomePath += "/.chainpqc/db/blockchain"
-	//MainWallet.SetPassword("a")
-	//MainWallet.Load()
+	HomePath += "/.chainpqc/db/wallet/"
+	mainWallet.SetPassword("a")
+	err = mainWallet.Load()
+	if err != nil {
+		return
+	}
 }
 
 func (w *Wallet) SetPassword(password string) {
@@ -194,13 +206,9 @@ func (w Wallet) Store() error {
 	}
 
 	mutexDb.Lock()
-	opts := gorocksdb.NewDefaultOptions()
-	opts.SetCreateIfMissing(true)
-
-	// Open the database with the provided options
-	walletDB, err := gorocksdb.OpenDb(opts, HomePath)
+	walletDB, err := leveldb.OpenFile(HomePath+common.GetSigName(), nil)
 	if err != nil {
-		log.Fatalf("Error opening database: %v", err)
+		return err
 	}
 	defer walletDB.Close()
 	defer mutexDb.Unlock()
@@ -224,12 +232,9 @@ func (w Wallet) Store() error {
 		return err
 	}
 
-	wo := gorocksdb.NewDefaultWriteOptions()
-	defer wo.Destroy()
 	// Put a key-value pair into the database
-	err = walletDB.Put(wo, []byte("main_account"), wm)
+	err = walletDB.Put([]byte("main_account"), wm, nil)
 	if err != nil {
-		log.Fatalf("Error putting key-value pair: %v", err)
 		return err
 	}
 
@@ -237,19 +242,21 @@ func (w Wallet) Store() error {
 }
 
 func (w Wallet) Sign(data []byte) (sig common.Signature, err error) {
+	if len(data) > 0 {
+		signature, err := w.signer.Sign(data)
+		if err != nil {
+			return common.Signature{}, err
+		}
 
-	signature, err := w.signer.Sign(data)
-	if err != nil {
-		return common.Signature{}, err
+		//signature := rand2.RandomBytes(common.SignatureLength)
+
+		err = sig.Init(signature, w.Address)
+		if err != nil {
+			return common.Signature{}, err
+		}
+		return sig, nil
 	}
-
-	//signature := rand2.RandomBytes(common.SignatureLength)
-
-	err = sig.Init(signature, w.Address)
-	if err != nil {
-		return common.Signature{}, err
-	}
-	return sig, nil
+	return common.Signature{}, fmt.Errorf("input data are empty")
 }
 
 func (w Wallet) GetSecretKey() common.PrivKey {
@@ -265,26 +272,22 @@ func (w Wallet) Check() bool {
 
 func (w *Wallet) Load() error {
 
-	opts := gorocksdb.NewDefaultOptions()
-	opts.SetCreateIfMissing(true)
 	// Open the database with the provided options
 	mutexDb.Lock()
-	walletDB, err := gorocksdb.OpenDb(opts, HomePath+common.GetSigName())
+	walletDB, err := leveldb.OpenFile(HomePath+common.GetSigName(), nil)
 	if err != nil {
-		log.Fatalf("Error opening database: %v", err)
+		return err
 	}
 	defer walletDB.Close()
-	defer mutexDb.Unlock()
-	ro := gorocksdb.NewDefaultReadOptions()
-	defer ro.Destroy()
-	// Get the value for the given key
-	value, err := walletDB.Get(ro, []byte("main_account"))
-	if err != nil {
-		log.Fatalf("Error getting value for key: %v", err)
-	}
-	defer value.Free()
 
-	err = json.Unmarshal(value.Data(), w)
+	defer mutexDb.Unlock()
+
+	value, err := walletDB.Get([]byte("main_account"), nil)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(value, w)
 	if err != nil {
 		log.Println(err)
 		return err
@@ -349,7 +352,7 @@ func Verify(msg []byte, sig common.Signature, pubkey common.PubKey) bool {
 }
 
 func LoadPubKey(addr common.Address) (pk common.PubKey, err error) {
-	val, err := database.LoadBytes(append([]byte(common.PubKeyDBPrefix), addr.GetBytes()...))
+	val, err := memDatabase.LoadBytes(append([]byte(common.PubKeyDBPrefix), addr.GetBytes()...))
 	if err != nil {
 		return pk, err
 	}

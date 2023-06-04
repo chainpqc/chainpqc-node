@@ -1,30 +1,43 @@
 package message
 
 import (
+	"bytes"
 	"github.com/chainpqc/chainpqc-node/common"
 	"github.com/chainpqc/chainpqc-node/transactionType"
+	"log"
 )
 
 type BaseMessage struct {
-	Head    string `json:"head"`
+	Head    []byte `json:"head"`
 	ChainID int16  `json:"chainID"`
 	Chain   uint8  `json:"chain"`
 }
 
 type AnyMessage interface {
-	GetHead() string
-	GetValidHead() []string
+	GetHead() []byte
+	GetValidHead() [][]byte
 	GetChainID() int16
 	GetTransactions() []transactionType.AnyTransaction
 	GetChain() uint8
 	GetBytes() []byte
+	GetFromBytes([]byte) error
 }
 
 func (m BaseMessage) GetBytes() []byte {
-	b := []byte(m.Head)
+	b := m.Head[:]
 	b = append(b, common.GetByteInt16(m.ChainID)...)
 	b = append(b, m.Chain)
 	return b
+}
+
+func (m *BaseMessage) GetFromBytes(b []byte) {
+	if len(b) != 5 {
+		log.Println("bytes length should be 5")
+		return
+	}
+	m.Head = b[:2]
+	m.ChainID = common.GetInt16FromByte(b[2:4])
+	m.Chain = b[4]
 }
 
 func CheckMessage(a AnyMessage) bool {
@@ -39,7 +52,7 @@ func CheckMessage(a AnyMessage) bool {
 	}
 	isValidHead := false
 	for _, key := range a.GetValidHead() {
-		if a.GetHead() == key {
+		if bytes.Compare(a.GetHead(), key) == 0 {
 			isValidHead = true
 			break
 		}

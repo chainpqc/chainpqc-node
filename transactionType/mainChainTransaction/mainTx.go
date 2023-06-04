@@ -29,7 +29,7 @@ func (mt MainChainTransaction) GetChain() uint8 {
 	return mt.TxParam.Chain
 }
 
-func (mt MainChainTransaction) GetData() MainChainTxData {
+func (mt MainChainTransaction) GetData() transactionType.AnyDataTransaction {
 	return mt.TxData
 }
 
@@ -57,18 +57,6 @@ func (mt MainChainTransaction) GetHash() common.Hash {
 	return mt.Hash
 }
 
-func (tx MainChainTransaction) GetBytesWithoutSignature() []byte {
-
-	b := tx.TxParam.GetBytes()
-	b = append(b, common.GetByteInt64(tx.Height)...)
-	b = append(b, common.GetByteInt64(tx.GasPrice)...)
-	b = append(b, common.GetByteInt64(tx.GasUsage)...)
-	b = append(b, tx.TxData.Recipient.GetBytes()...)
-	b = append(b, common.GetByteInt64(tx.TxData.Amount)...)
-	b = append(b, tx.TxData.OptData...)
-	return b
-}
-
 func (td MainChainTxData) GetString() string {
 	t := "Recipient: " + td.Recipient.GetHex() + "\n"
 	t += "Amount PQC: " + fmt.Sprintln(account.Int64toFloat64(td.Amount)) + "\n"
@@ -89,4 +77,41 @@ func (tx MainChainTransaction) GetString() string {
 
 func (tx MainChainTransaction) GetSenderAddress() common.Address {
 	return tx.TxParam.Sender
+}
+
+func (md MainChainTxData) GetBytes() []byte {
+	b := md.Recipient.GetBytes()
+	b = append(b, common.GetByteInt64(md.Amount)...)
+	b = append(b, md.OptData...)
+	return b
+}
+
+func (mt MainChainTransaction) GetPrice() int64 {
+	return mt.GasPrice
+}
+
+func (tx MainChainTransaction) GetBytesWithoutSignature(withHash bool) []byte {
+
+	b := tx.TxParam.GetBytes()
+	b = append(b, tx.TxData.GetBytes()...)
+	b = append(b, common.GetByteInt64(tx.Height)...)
+	b = append(b, common.GetByteInt64(tx.GasPrice)...)
+	b = append(b, common.GetByteInt64(tx.GasUsage)...)
+	if withHash {
+		b = append(b, tx.GetHash().GetBytes()...)
+	}
+	return b
+}
+
+func (mt MainChainTransaction) CalcHash() (common.Hash, error) {
+	b := mt.GetBytesWithoutSignature(false)
+	hash, err := common.GetHashFromBytes(b)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	return hash, nil
+}
+
+func (mt *MainChainTransaction) SetHash(h common.Hash) {
+	mt.Hash = h
 }

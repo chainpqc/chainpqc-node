@@ -15,23 +15,30 @@ type TxParam struct {
 	Chain       uint8          `json:"chain"`
 }
 
+type AnyDataTransaction interface {
+	GetBytes() []byte
+}
+
 type AnyTransaction interface {
 	GetHash() common.Hash
 	GetParam() TxParam
+	GetData() AnyDataTransaction
 	GetSenderAddress() common.Address
 	//Store() error
 	//StoreToPool(dbprefix string) error
 	//DeleteFromPool(dbprefix string) error
 	//LoadByHash(hash common.Hash, dbPrefix string) (AnyTransaction, error)
 	//CheckTransaction(int64) (bool, int64)
-	GasUsageEstimate() int64
 	GetHeight() int64
 	GetGasUsage() int64
+	GetPrice() int64
 	//FundsUsedForTx() (recipientFunds int64, senderCost int64)
 	GetChain() uint8
 	GetString() string
 	GetSignature() common.Signature
-	GetBytesWithoutSignature() []byte
+	GetBytesWithoutSignature(bool) []byte
+	CalcHash() (common.Hash, error)
+	SetHash(hash common.Hash)
 }
 
 func (tp TxParam) GetBytes() []byte {
@@ -55,15 +62,12 @@ func (tp TxParam) GetString() string {
 
 func GetBytes(tx AnyTransaction) []byte {
 	b := tx.GetSignature().GetBytes()
-	b = append(b, tx.GetBytesWithoutSignature()...)
+	b = append(b, tx.GetBytesWithoutSignature(true)...)
 	return b
 }
 
 func VerifyTransaction(tx AnyTransaction) bool {
-	b, err := common.CalcHashToByte(tx.GetBytesWithoutSignature())
-	if err != nil {
-		return false
-	}
+	b := tx.GetHash().GetBytes()
 	a := tx.GetSenderAddress()
 	pk, err := wallet.LoadPubKey(a)
 	if err != nil {
@@ -74,28 +78,36 @@ func VerifyTransaction(tx AnyTransaction) bool {
 }
 
 func SignTransaction(tx AnyTransaction) (common.Signature, error) {
-	b, err := common.CalcHashToByte(tx.GetBytesWithoutSignature())
-	if err != nil {
-		return common.Signature{}, err
-	}
+	b := tx.GetHash()
+
 	w := wallet.EmptyWallet()
 	w = w.GetWallet()
-	return w.Sign(b)
+	return w.Sign(b.GetBytes())
 }
 
-//
-//func MarshalTx(tx AnyTransaction) []byte {
-//
-//	hash := tx.Hash()
-//	sig := tx.GetSignature()
-//	res := hash.GetByte()
-//	res = append(res, common.GetByteInt64(tx.GetHeightFinal())...)
-//	ln := common.GetByteInt16(int16(sig.GetLen()))
-//	res = append(res, ln...)
-//	res = append(res, sig.GetByte()...)
-//	res = append(res, tx.GetByte()...)
-//	return res
-//}
+func SignTransactionAllToBytes(tx AnyTransaction) ([]byte, error) {
+	signature, err := SignTransaction(tx)
+	if err != nil {
+		return nil, err
+	}
+	b := tx.GetBytesWithoutSignature(true)
+	b = append(b, signature.GetBytes()...)
+	return b, nil
+}
+
+func GetBytesWithoutSignature(tx AnyTransaction, withHash bool) []byte {
+	b := tx.GetParam().GetBytes()
+	b = append(b, tx.GetData().GetBytes()...)
+	b = append(b, tx.GetHash().GetBytes()...)
+	b = append(b, common.GetByteInt64(tx.GetHeight())...)
+	b = append(b, common.GetByteInt64(tx.GetPrice())...)
+	b = append(b, common.GetByteInt64(tx.GetGasUsage())...)
+	if withHash {
+		b = append(b, tx.GetHash().GetBytes()...)
+	}
+	return b
+}
+
 //
 //func UnmarshalTxParam(b []byte) (TxParam, error) {
 //	var txParam TxParam
