@@ -1,43 +1,32 @@
-package nonceMsg
+package nonceServices
 
 import (
-	"fmt"
+	"github.com/chainpqc/chainpqc-node/blocks"
 	"github.com/chainpqc/chainpqc-node/common"
 	"github.com/chainpqc/chainpqc-node/message"
+	"github.com/chainpqc/chainpqc-node/services"
 	"github.com/chainpqc/chainpqc-node/tcpip"
 	"github.com/chainpqc/chainpqc-node/transactionType"
-	transactionType6 "github.com/chainpqc/chainpqc-node/transactionType/contractChainTransaction"
-	transactionType5 "github.com/chainpqc/chainpqc-node/transactionType/dexChainTransaction"
-	transactionType2 "github.com/chainpqc/chainpqc-node/transactionType/mainChainTransaction"
-	transactionType3 "github.com/chainpqc/chainpqc-node/transactionType/pubKeyChainTransaction"
-	transactionType4 "github.com/chainpqc/chainpqc-node/transactionType/stakeChainTransaction"
 	"github.com/chainpqc/chainpqc-node/wallet"
 	"log"
-	"sync"
 	"time"
 )
 
-var sendChan chan []byte
-var sendChanSelf chan []byte
-var sendMutex sync.RWMutex
-
 func InitNonceService() {
-	sendMutex.Lock()
-	sendChan = make(chan []byte)
+	services.SendMutexNonce.Lock()
+	services.SendChanNonce = make(chan []byte)
 
-	sendChanSelf = make(chan []byte)
-	sendMutex.Unlock()
+	services.SendChanSelfNonce = make(chan []byte)
+	services.SendMutexNonce.Unlock()
 	startPublishingNonceMsg()
 	time.Sleep(time.Second)
 	go sendNonceMsgInLoop()
 }
 
-func generateNonceMsg(chain uint8) (message.AnyNonceMessage, error) {
-	common.HeightMutex.RLock()
+func generateNonceMsg(chain uint8, topic [2]byte) (message.TransactionsMessage, error) {
 	h := common.GetHeight()
-	common.HeightMutex.RUnlock()
 
-	var nonceTransaction transactionType.AnyTransaction
+	var nonceTransaction transactionType.Transaction
 	tp := transactionType.TxParam{
 		ChainID:     common.GetChainID(),
 		Sender:      wallet.EmptyWallet().GetWallet().Address,
@@ -45,115 +34,60 @@ func generateNonceMsg(chain uint8) (message.AnyNonceMessage, error) {
 		Nonce:       0,
 		Chain:       chain,
 	}
-
-	switch chain {
-	case 0:
-		dataTx := transactionType2.MainChainTxData{
-			Recipient: common.Address{},
-			Amount:    0,
-			OptData:   []byte{},
-		}
-		nonceTransaction = &transactionType2.MainChainTransaction{
-			TxData:    dataTx,
-			TxParam:   tp,
-			Hash:      common.Hash{},
-			Signature: common.Signature{},
-			Height:    h + 1,
-			GasPrice:  0,
-			GasUsage:  0,
-		}
-	case 1:
-		dataTx := transactionType3.PubKeyChainTxData{
-			Recipient: common.PubKey{},
-			Amount:    0,
-			OptData:   []byte{},
-		}
-		nonceTransaction = &transactionType3.PubKeyChainTransaction{
-			TxData:    dataTx,
-			TxParam:   tp,
-			Hash:      common.Hash{},
-			Signature: common.Signature{},
-			Height:    h + 1,
-			GasPrice:  0,
-			GasUsage:  0,
-		}
-	case 2:
-		dataTx := transactionType4.StakeChainTxData{
-			Recipient: common.Address{},
-			Amount:    0,
-			OptData:   []byte{},
-		}
-		nonceTransaction = &transactionType4.StakeChainTransaction{
-			TxData:    dataTx,
-			TxParam:   tp,
-			Hash:      common.Hash{},
-			Signature: common.Signature{},
-			Height:    h + 1,
-			GasPrice:  0,
-			GasUsage:  0,
-		}
-	case 3:
-		dataTx := transactionType5.DexChainTxData{
-			Recipient: common.Address{},
-			Amount:    0,
-			OptData:   []byte{},
-		}
-		nonceTransaction = &transactionType5.DexChainTransaction{
-			TxData:    dataTx,
-			TxParam:   tp,
-			Hash:      common.Hash{},
-			Signature: common.Signature{},
-			Height:    h + 1,
-			GasPrice:  0,
-			GasUsage:  0,
-		}
-	case 4:
-		dataTx := transactionType6.ContractChainTxData{
-			Recipient: common.Address{},
-			Amount:    0,
-			OptData:   []byte{},
-		}
-		nonceTransaction = &transactionType6.ContractChainTransaction{
-			TxData:    dataTx,
-			TxParam:   tp,
-			Hash:      common.Hash{},
-			Signature: common.Signature{},
-			Height:    h + 1,
-			GasPrice:  0,
-			GasUsage:  0,
-		}
-	default:
-		return message.AnyNonceMessage{}, fmt.Errorf("chain is not correct")
-	}
-	hash, err := nonceTransaction.CalcHash()
+	lastBlockHash, err := blocks.LoadHashOfBlock(h)
 	if err != nil {
-		return message.AnyNonceMessage{}, err
+		lastBlockHash = common.EmptyHash().GetBytes()
 	}
-	nonceTransaction.SetHash(hash)
-	bm := message.BaseMessage{Head: []byte("nn"),
+	optData := common.GetByteInt64(h)
+	optData = append(optData, lastBlockHash...)
+
+	dataTx := transactionType.TxData{
+		Recipient: common.EmptyAddress(),
+		Amount:    0,
+		OptData:   optData[:],
+	}
+	nonceTransaction = transactionType.Transaction{
+		TxData:    dataTx,
+		TxParam:   tp,
+		Hash:      common.Hash{},
+		Signature: common.Signature{},
+		Height:    h + 1,
+		GasPrice:  0,
+		GasUsage:  0,
+	}
+	topic[1] = chain
+
+	err = (&nonceTransaction).CalcHashAndSet()
+	if err != nil {
+		return message.TransactionsMessage{}, err
+	}
+
+	err = (&nonceTransaction).Sign()
+	if err != nil {
+		return message.TransactionsMessage{}, err
+	}
+
+	bm := message.BaseMessage{
+		Head:    []byte("nn"),
 		ChainID: common.GetChainID(),
-		Chain:   chain}
+		Chain:   chain,
+	}
+	bb := nonceTransaction.GetBytes()
+	n := message.TransactionsMessage{
+		BaseMessage:       bm,
+		TransactionsBytes: map[[2]byte][][]byte{topic: {bb}},
+	}
 
-	bb, err := transactionType.SignTransactionAllToBytes(nonceTransaction)
-	if err != nil {
-		return message.AnyNonceMessage{}, fmt.Errorf("error signing transaction: %v", err)
-	}
-	hb := [2]byte{}
-	copy(hb[:], "nn")
-	n := message.AnyNonceMessage{
-		BaseMessage: bm,
-		NonceBytes:  map[[2]byte][][]byte{hb: {bb}},
-	}
-	//fmt.Printf("%v", n)
 	return n, nil
 }
 
 func sendNonceMsgInLoopSelf(chanRecv chan []byte) {
-
+	var topic = [2]byte{'S', '0'}
 Q:
 	for range time.Tick(time.Second) {
 		chain := common.GetChainForHeight(common.GetHeight() + 1)
-		sendNonceMsg(tcpip.MyIP, chain)
+		topic[1] = chain
+		sendNonceMsg(tcpip.MyIP, chain, topic)
 		select {
 		case s := <-chanRecv:
 			if len(s) == 4 && string(s) == "EXIT" {
@@ -164,12 +98,12 @@ Q:
 	}
 }
 
-func sendNonceMsg(ip string, chain uint8) {
+func sendNonceMsg(ip string, chain uint8, topic [2]byte) {
 	isync := common.IsSyncing.Load()
 	if isync == true {
 		return
 	}
-	n, err := generateNonceMsg(chain)
+	n, err := generateNonceMsg(chain, topic)
 	if err != nil {
 		log.Println(err)
 		return
@@ -182,25 +116,26 @@ func Send(addr string, nb []byte) {
 	lip := common.GetByteInt16(int16(len(bip)))
 	lip = append(lip, bip...)
 	nb = append(lip, nb...)
-	sendMutex.Lock()
-	sendChan <- nb
-	sendMutex.Unlock()
+	services.SendMutexNonce.Lock()
+	services.SendChanNonce <- nb
+	services.SendMutexNonce.Unlock()
 }
 
 func sendNonceMsgInLoop() {
 	for range time.Tick(time.Second * 10) {
 		chain := common.GetChainForHeight(common.GetHeight() + 1)
-		sendNonceMsg("0.0.0.0", chain)
+		var topic = [2]byte{'N', chain}
+		sendNonceMsg("0.0.0.0", chain, topic)
 	}
 }
 
 func startPublishingNonceMsg() {
-	sendMutex.Lock()
+	services.SendMutexNonce.Lock()
 	for i := 0; i < 5; i++ {
-		go tcpip.StartNewListener(sendChan, tcpip.NonceTopic[i])
-		go tcpip.StartNewListener(sendChanSelf, tcpip.SelfNonceTopic[i])
+		go tcpip.StartNewListener(services.SendChanNonce, tcpip.NonceTopic[i])
+		go tcpip.StartNewListener(services.SendChanSelfNonce, tcpip.SelfNonceTopic[i])
 	}
-	sendMutex.Unlock()
+	services.SendMutexNonce.Unlock()
 }
 
 func StartSubscribingNonceMsg(ip string, chain uint8) {
@@ -266,242 +201,3 @@ Q:
 	}
 	log.Println("Exit connection receiving loop (nonce msg self)")
 }
-
-//func (n *AnyNonceMsg) CreateBlockFromNonceMain(lastBlock block.BlockSideChain,
-//	hashes []common.HHash, stateAccountsHash common.HHash,
-//	stakeHashes []common.HHash) (block.BlockMainChain, error) {
-//
-//	height := common.GetInt64FromByte(n.Value["last_height_msg"])
-//	ts := common.GetInt64FromByte(n.Value["timestamp_msg"])
-//
-//	sigAddr := common.Address{}
-//	err := sigAddr.Init(n.Value["operator_address_msg"])
-//	if err != nil {
-//		log.Println("Can not create operator of nonce msg address", err)
-//		return block.BlockMainChain{}, err
-//	}
-//	sigMsg := common.Signature{}
-//	err = sigMsg.Init(n.Value["signature_msg"], sigAddr)
-//	if err != nil {
-//		log.Println("Can not obtain signature hash from nonceMsg")
-//		return block.BlockMainChain{}, err
-//	}
-//
-//	if bytes.Compare(n.Value["last_block_hash_msg"], lastBlock.BlockHash.GetByte()) != 0 {
-//		log.Println("last block hash and nonce hash do not match")
-//		return block.BlockMainChain{}, err
-//	}
-//
-//	lbh := common.HHash{}
-//	lbh, err = lbh.Init(n.Value["last_block_hash_msg"])
-//	if err != nil {
-//		log.Println("Can not obtain last block hash from nonceMsg")
-//		return block.BlockMainChain{}, err
-//	}
-//
-//	ti := ts - lastBlock.BaseBlock.BlockTimeStamp
-//	diff := block.AdjustDifficulty(lastBlock.BaseBlock.Header.Difficulty, ti)
-//
-//	bh := block.Header{
-//		PreviousHash:     lastBlock.BlockHash,
-//		Difficulty:       diff,
-//		Height:           height,
-//		DelegatedAccount: common.DelegatedAccount,
-//		OperatorAccount:  wallet.MainWallet.Address,
-//		SignatureMsg:     sigMsg,
-//		NonceMessage:     n.GetByte(),
-//	}
-//	hhbh := crypto.GetHHashFromByte(bh.GetByte()...)
-//
-//	bb := block.Block{
-//		Header:            bh,
-//		StateAccountsHash: stateAccountsHash,   // todo
-//		OutputLogsHash:    common.EmptyHHash(), // todo
-//		TransactionsHash:  common.EmptyHHash(),
-//		BlockHeaderHash:   hhbh,
-//		BlockTimeStamp:    ts,
-//		RewardPercentage:  common.RewardPercentage,
-//		PriceOracle:       []byte{},
-//		RandOracle:        []byte{},
-//		BridgeOracle:      []byte{},
-//	}
-//
-//	txhSum, err := common.SumHHashes(hashes)
-//	if err != nil {
-//		log.Println(err)
-//		return block.BlockMainChain{}, err
-//	}
-//	if txhSum.Len == common.HHashLength {
-//		bb.TransactionsHash = txhSum
-//	}
-//
-//	stakehSum, err := common.SumHHashes(stakeHashes)
-//	if err != nil {
-//		log.Println(err)
-//		return block.BlockMainChain{}, err
-//	}
-//	if len(stakeHashes) == 0 {
-//		stakehSum = common.EmptyHHash()
-//	}
-//
-//	b := block.BlockMainChain{
-//		BaseBlock:   bb,
-//		Chain:       0,
-//		StakingHash: stakehSum,
-//		BlockHash:   common.EmptyHHash(),
-//	}
-//	hhb := b.CalcHHash()
-//	b.BlockHash = hhb
-//	return b, nil
-//}
-//
-//func (n *AnyNonceMsg) CreateBlockFromNonceSide(lastBlock block.BlockMainChain,
-//	hashes []common.HHash, stateAccountsHash common.HHash) (block.BlockSideChain, error) {
-//
-//	height := common.GetInt64FromByte(n.Value["last_height_msg"])
-//	ts := common.GetInt64FromByte(n.Value["timestamp_msg"])
-//
-//	sigAddr := common.Address{}
-//	err := sigAddr.Init(n.Value["operator_address_msg"])
-//	if err != nil {
-//		log.Println("Can not create operator of nonce msg address", err)
-//		return block.BlockSideChain{}, err
-//	}
-//
-//	sigMsg := common.Signature{}
-//	err = sigMsg.Init(n.Value["signature_msg"], sigAddr)
-//	if err != nil {
-//		log.Println("Can not obtain signature hash from nonceMsg")
-//		return block.BlockSideChain{}, err
-//	}
-//
-//	if bytes.Compare(n.Value["last_block_hash_msg"], lastBlock.BlockHash.GetByte()) != 0 {
-//		log.Println("last block hash and nonce hash do not match")
-//		return block.BlockSideChain{}, err
-//	}
-//
-//	lbh := common.HHash{}
-//	lbh, err = lbh.Init(n.Value["last_block_hash_msg"])
-//	if err != nil {
-//		log.Println("Can not obtain last block hash from nonceMsg")
-//		return block.BlockSideChain{}, err
-//	}
-//
-//	ti := ts - lastBlock.BaseBlock.BlockTimeStamp
-//	diff := block.AdjustDifficulty(lastBlock.BaseBlock.Header.Difficulty, ti)
-//
-//	bh := block.Header{
-//		PreviousHash:     lastBlock.BlockHash,
-//		Difficulty:       diff,
-//		Height:           height,
-//		DelegatedAccount: common.DelegatedAccount,
-//		OperatorAccount:  wallet.MainWallet.Address,
-//		SignatureMsg:     sigMsg,
-//		NonceMessage:     n.GetByte(),
-//	}
-//	hhbh := crypto.GetHHashFromByte(bh.GetByte()...)
-//
-//	bb := block.Block{
-//		Header:            bh,
-//		StateAccountsHash: stateAccountsHash,
-//		OutputLogsHash:    common.EmptyHHash(), // todo
-//		TransactionsHash:  common.EmptyHHash(),
-//		BlockHeaderHash:   hhbh,
-//		BlockTimeStamp:    ts,
-//		RewardPercentage:  common.RewardPercentage,
-//		PriceOracle:       []byte{},
-//		RandOracle:        []byte{},
-//		BridgeOracle:      []byte{},
-//	}
-//
-//	txhSum, err := common.SumHHashes(hashes)
-//	if err != nil {
-//		log.Println(err)
-//		return block.BlockSideChain{}, err
-//	}
-//	if txhSum.Len == common.HHashLength {
-//		bb.TransactionsHash = txhSum
-//	}
-//
-//	b := block.BlockSideChain{
-//		BaseBlock: bb,
-//		BlockHash: common.EmptyHHash(),
-//		Chain:     1,
-//	}
-//	hhb := b.CalcHHash()
-//	b.BlockHash = hhb
-//	return b, nil
-//}
-//
-//func GetPriceThreshold() int64 {
-//	// todo
-//	return 0
-//}
-//
-//func CreateBlockHashesFromBlock(bl block.AnyBlock, hashes []common.HHash, stakeHashes []common.HHash, stateAcount []byte) block.AnyBlockHashes {
-//
-//	var blh block.AnyBlockHashes
-//	switch bl.GetChain() {
-//	case 0:
-//		b := block.BlockHashesMainChain{
-//			BlockMainChain:    bl.(block.BlockMainChain),
-//			TransactionHashes: []common.HHash{},
-//			StakingHashes:     []common.HHash{},
-//			OutputLogsHashes:  []common.HHash{},
-//			StateAccounts:     stateAcount,
-//		}
-//		if len(hashes) > 0 {
-//			b.TransactionHashes = hashes
-//		}
-//		if len(stakeHashes) > 0 {
-//			b.StakingHashes = stakeHashes
-//		}
-//		blh = &b
-//	case 1:
-//		b := block.BlockHashesSideChain{
-//			BlockSideChain:    bl.(block.BlockSideChain),
-//			TransactionHashes: []common.HHash{},
-//			OutputLogsHashes:  []common.HHash{},
-//			StateAccounts:     stateAcount,
-//		}
-//		if len(hashes) > 0 {
-//			b.TransactionHashes = hashes
-//		}
-//		blh = &b
-//	}
-//
-//	return blh
-//}
-//
-//func GenerateBlockMessageHashes(bl block.AnyBlockHashes) (AnyNonceMsg, []byte) {
-//	bm := message2.BaseMessage{
-//		Head:    "block",
-//		ChainID: common.ChainID,
-//	}
-//
-//	n := message2.Message{
-//		BaseMessage: bm,
-//		Value:       map[string][]byte{},
-//	}
-//
-//	blm := bl.Marshal()
-//	n.Value["block"] = blm
-//
-//	an := AnyNonceMsg(n)
-//	nb, err := json.Marshal(an)
-//	if err != nil {
-//		log.Println("Can not marshal block message with error (main chain)", err)
-//		return an, []byte{}
-//	}
-//	return an, nb
-//}
-//
-//func SendNonce(ip string, nb []byte) {
-//	bip := []byte(ip)
-//	lip := common.GetByteInt16(int16(len(bip)))
-//	lip = append(lip, bip...)
-//	nb = append(lip, nb...)
-//	sendMutex.Lock()
-//	sendChan <- nb
-//	sendMutex.Unlock()
-//}

@@ -12,7 +12,6 @@ import (
 
 	"github.com/chainpqc/chainpqc-node/common"
 	"github.com/chainpqc/chainpqc-node/crypto/oqs"
-	"github.com/chainpqc/chainpqc-node/database"
 	"golang.org/x/crypto/sha3"
 	"io"
 	"log"
@@ -32,7 +31,7 @@ type Wallet struct {
 }
 
 var mainWallet Wallet
-var mutexDb sync.Mutex
+var mutexDb sync.RWMutex
 var HomePath string
 
 type AnyWallet interface {
@@ -49,7 +48,7 @@ func init() {
 	//if err != nil {
 	//	log.Fatal(err)
 	//}
-	mainWallet = EmptyWallet()
+	mainWallet = Wallet{}
 
 	HomePath, err = os.UserHomeDir()
 	if err != nil {
@@ -248,8 +247,6 @@ func (w Wallet) Sign(data []byte) (sig common.Signature, err error) {
 			return common.Signature{}, err
 		}
 
-		//signature := rand2.RandomBytes(common.SignatureLength)
-
 		err = sig.Init(signature, w.Address)
 		if err != nil {
 			return common.Signature{}, err
@@ -273,14 +270,14 @@ func (w Wallet) Check() bool {
 func (w *Wallet) Load() error {
 
 	// Open the database with the provided options
-	mutexDb.Lock()
+	mutexDb.RLock()
 	walletDB, err := leveldb.OpenFile(HomePath+common.GetSigName(), nil)
 	if err != nil {
 		return err
 	}
 	defer walletDB.Close()
 
-	defer mutexDb.Unlock()
+	defer mutexDb.RUnlock()
 
 	value, err := walletDB.Get([]byte("main_account"), nil)
 	if err != nil {
@@ -336,29 +333,17 @@ func (w *Wallet) ChangePassword(password, newPassword string) error {
 	return nil
 }
 
-func Verify(msg []byte, sig common.Signature, pubkey common.PubKey) bool {
+func Verify(msg []byte, sig []byte, pubkey []byte) bool {
 	var verifier oqs.Signature
 	err := verifier.Init(common.GetSigName(), nil)
 	if err != nil {
 		return false
 	}
 
-	isVerified, err := verifier.Verify(msg, sig.GetBytes(), pubkey.GetBytes())
+	isVerified, err := verifier.Verify(msg, sig, pubkey)
 	if err != nil {
 		return false
 	}
 	return isVerified
 	//return true
-}
-
-func LoadPubKey(addr common.Address) (pk common.PubKey, err error) {
-	val, err := memDatabase.LoadBytes(append([]byte(common.PubKeyDBPrefix), addr.GetBytes()...))
-	if err != nil {
-		return pk, err
-	}
-	err = pk.Init(val)
-	if err != nil {
-		return pk, err
-	}
-	return pk, nil
 }

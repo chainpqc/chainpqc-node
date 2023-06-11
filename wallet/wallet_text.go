@@ -65,10 +65,10 @@ func TestStoreAndLoadWallet(t *testing.T) {
 	password := "testpassword"
 	wallet, err := GenerateNewWallet(password)
 	assert.NoError(t, err)
-	// Store the wallet
+	// Put the wallet
 	err = wallet.Store()
 	assert.NoError(t, err)
-	// Load the wallet
+	// Get the wallet
 	loadedWallet := EmptyWallet()
 	loadedWallet.SetPassword(password)
 	err = loadedWallet.Load()
@@ -87,7 +87,7 @@ func TestChangePassword(t *testing.T) {
 	// Change the password
 	err = wallet.ChangePassword(password, newPassword)
 	assert.NoError(t, err)
-	// Load the wallet with the new password
+	// Get the wallet with the new password
 	loadedWallet := EmptyWallet()
 	loadedWallet.SetPassword(newPassword)
 	err = loadedWallet.Load()
@@ -109,6 +109,6 @@ func TestSignAndVerify(t *testing.T) {
 		log.Fatal(err)
 	}
 	// Verify the signature using the wallet's public key
-	isVerified := Verify(message, signature, wallet.PublicKey)
+	isVerified := Verify(message, signature.GetBytes(), wallet.PublicKey.GetBytes())
 	assert.Equal(t, isVerified, true)
 }

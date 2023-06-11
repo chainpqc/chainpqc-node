@@ -6,14 +6,22 @@ import (
 )
 
 var height int64
-var HeightMutex sync.RWMutex
+var heightMutex sync.RWMutex
 var BalanceMutex sync.RWMutex
 var BlockMutex sync.Mutex
 var SyncingMutex sync.Mutex
 var IsSyncing = atomic.Bool{}
 
 func GetHeight() int64 {
+	heightMutex.RLock()
+	defer heightMutex.RUnlock()
 	return height
+}
+
+func SetHeight(h int64) {
+	heightMutex.Lock()
+	defer heightMutex.Unlock()
+	height = h
 }
 
 func CheckHeight(chain uint8, heightToCheck int64) bool {
@@ -21,6 +29,5 @@ func CheckHeight(chain uint8, heightToCheck int64) bool {
 }
 
 func GetChainForHeight(heightToCheck int64) uint8 {
-	chainProper := heightToCheck % 5
-	return uint8(chainProper)
+	return uint8(heightToCheck % 5)
 }
